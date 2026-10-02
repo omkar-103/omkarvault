@@ -1,3 +1,35 @@
+export interface PlacedImage {
+  name: string;
+  url: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  isBackground?: boolean;
+}
+
+export interface TextRun {
+  text: string;
+  fontSize?: number;
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+  fontFamily?: string;
+}
+
+export interface TextParagraph {
+  align: 'left' | 'center' | 'right' | 'justify';
+  runs: TextRun[];
+}
+
+export interface PlacedText {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  paragraphs: TextParagraph[];
+}
+
 export interface SlideData {
   index: number;
   title: string;
@@ -5,9 +37,13 @@ export interface SlideData {
   paragraphs: string[];
   bulletPoints: string[];
   backgroundColor?: string;
+  backgroundImageUrl?: string;
   hasImages: boolean;
   images: Array<{ name: string; url: string }>;
+  placedImages?: PlacedImage[];
+  placedTexts?: PlacedText[];
   shapesCount: number;
+  aspectRatio?: number;
 }
 
 export interface PresentationMeta {

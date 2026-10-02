@@ -508,11 +508,21 @@ export const PresentationViewerModal: React.FC<PresentationViewerModalProps> = (
                       <span className="text-amber-400 font-bold">●</span>
                     ) : null}
                   </div>
+                  {s.backgroundImageUrl && (
+                    <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-zinc-700/50 mb-1.5 bg-zinc-900">
+                      <img
+                        src={s.backgroundImageUrl}
+                        alt={`Slide ${s.index}`}
+                        className="w-full h-full object-cover select-none pointer-events-none"
+                        loading="lazy"
+                      />
+                    </div>
+                  )}
                   <p className="text-xs font-semibold text-zinc-200 line-clamp-1">
                     {s.title || `Slide ${s.index}`}
                   </p>
                   <p className="text-[10px] text-zinc-500 line-clamp-1 mt-0.5">
-                    {s.bulletPoints[0] || s.paragraphs[0] || 'Empty slide'}
+                    {s.bulletPoints[0] || s.paragraphs[0] || 'Slide content'}
                   </p>
                 </div>
               ))}
@@ -536,74 +546,152 @@ export const PresentationViewerModal: React.FC<PresentationViewerModalProps> = (
               ref={slideAreaRef}
               onMouseMove={handleMouseMove}
               onMouseLeave={handleMouseLeave}
-              className="relative w-full max-w-5xl aspect-video rounded-2xl shadow-2xl overflow-hidden border border-zinc-800 transition-transform duration-150 flex flex-col"
+              className="relative w-full max-w-5xl aspect-video rounded-2xl shadow-2xl overflow-hidden border border-zinc-800 transition-transform duration-150 flex flex-col select-none"
               style={{
-                backgroundColor: currentSlide?.backgroundColor || '#0f172a',
+                backgroundColor: currentSlide?.backgroundColor || (currentSlide?.backgroundImageUrl ? '#ffffff' : '#0f172a'),
+                aspectRatio: currentSlide?.aspectRatio ? `${currentSlide.aspectRatio}` : '16/9',
                 transform: `scale(${zoom / 100})`,
                 transformOrigin: 'center center',
+                containerType: 'inline-size',
               }}
             >
-              {/* Slide Background Subtle Geometric Lines */}
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_bottom_right,_var(--tw-gradient-stops))] from-amber-500/5 via-transparent to-transparent pointer-events-none" />
+              {/* Subtle ambient lighting for dark non-image slides */}
+              {!currentSlide?.backgroundImageUrl && (
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_bottom_right,_var(--tw-gradient-stops))] from-amber-500/5 via-transparent to-transparent pointer-events-none" />
+              )}
 
-              {/* Render Slide Content */}
-              <div className="relative z-10 w-full h-full p-8 sm:p-12 lg:p-14 flex flex-col justify-between select-text text-zinc-100">
-                {/* Slide Header */}
-                <div>
-                  <div className="text-[11px] font-mono uppercase tracking-widest text-amber-400/90 mb-2">
-                    AEGIS VAULT PRESENTATION · SLIDE {currentSlideIndex}
+              {/* Render High-Fidelity Visual Slide if background or placed elements exist */}
+              {currentSlide?.backgroundImageUrl || (currentSlide?.placedTexts && currentSlide.placedTexts.length > 0) || (currentSlide?.placedImages && currentSlide.placedImages.length > 0) ? (
+                <>
+                  {/* Full-Bleed Slide Graphic / Background */}
+                  {currentSlide.backgroundImageUrl && (
+                    <img
+                      src={currentSlide.backgroundImageUrl}
+                      alt={`Slide ${currentSlideIndex}`}
+                      className="absolute inset-0 w-full h-full object-cover select-none pointer-events-none z-0"
+                      loading="eager"
+                    />
+                  )}
+
+                  {/* Placed Media (Badges, Overlays, Product Shots) */}
+                  {currentSlide.placedImages?.map((img, idx) => (
+                    <div
+                      key={`pimg-${idx}`}
+                      className="absolute pointer-events-none select-none z-10 flex items-center justify-center overflow-hidden"
+                      style={{
+                        left: `${Math.max(0, img.left)}%`,
+                        top: `${Math.max(0, img.top)}%`,
+                        width: `${img.width}%`,
+                        height: `${img.height}%`,
+                      }}
+                    >
+                      <img
+                        src={img.url}
+                        alt={img.name}
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  ))}
+
+                  {/* Placed Text Elements (Aligned, Styled, Proportional) */}
+                  {currentSlide.placedTexts?.map((txt, idx) => (
+                    <div
+                      key={`ptxt-${idx}`}
+                      className="absolute z-20 flex flex-col justify-start select-text overflow-hidden"
+                      style={{
+                        left: `${Math.max(0, txt.left)}%`,
+                        top: `${Math.max(0, txt.top)}%`,
+                        width: `${Math.min(100 - Math.max(0, txt.left), txt.width)}%`,
+                        minHeight: `${txt.height}%`,
+                      }}
+                    >
+                      {txt.paragraphs.map((p, pIdx) => (
+                        <div
+                          key={`p-${pIdx}`}
+                          style={{
+                            textAlign: p.align,
+                            lineHeight: 1.25,
+                          }}
+                          className="mb-1 last:mb-0"
+                        >
+                          {p.runs.map((r, rIdx) => {
+                            const fontScale = r.fontSize ? `${(r.fontSize * 0.07).toFixed(2)}cqi` : undefined;
+                            return (
+                              <span
+                                key={`r-${rIdx}`}
+                                style={{
+                                  fontSize: fontScale || 'clamp(11px, 1.2cqi, 20px)',
+                                  fontWeight: r.bold ? 700 : 400,
+                                  fontStyle: r.italic ? 'italic' : 'normal',
+                                  color: r.color || (currentSlide.backgroundImageUrl ? '#1e293b' : '#f8fafc'),
+                                  fontFamily: r.fontFamily ? `"${r.fontFamily}", sans-serif` : 'inherit',
+                                }}
+                              >
+                                {r.text}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </>
+              ) : (
+                /* Fallback for Plain / Raw Presentations */
+                <div className="relative z-10 w-full h-full p-8 sm:p-12 lg:p-14 flex flex-col justify-between select-text text-zinc-100">
+                  <div>
+                    <div className="text-[11px] font-mono uppercase tracking-widest text-amber-400/90 mb-2">
+                      SLIDE {currentSlideIndex}
+                    </div>
+                    <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-white font-sans max-w-3xl">
+                      {currentSlide?.title || `Slide ${currentSlideIndex}`}
+                    </h2>
                   </div>
-                  <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-white font-sans max-w-3xl">
-                    {currentSlide?.title || `Slide ${currentSlideIndex}`}
-                  </h2>
-                </div>
 
-                {/* Slide Body: Bullets, Paragraphs, Images */}
-                <div className="my-auto py-4 space-y-4">
-                  {currentSlide?.bulletPoints && currentSlide.bulletPoints.length > 0 ? (
-                    <ul className="space-y-3 max-w-3xl">
-                      {currentSlide.bulletPoints.map((bullet, idx) => (
-                        <li key={idx} className="flex items-start gap-3 text-sm sm:text-base lg:text-lg text-zinc-200">
-                          <span className="text-amber-400 mt-1 shrink-0 font-bold">▪</span>
-                          <span className="leading-relaxed">{bullet}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : currentSlide?.paragraphs && currentSlide.paragraphs.length > 0 ? (
-                    <div className="space-y-3 max-w-3xl">
-                      {currentSlide.paragraphs.map((p, idx) => (
-                        <p key={idx} className="text-sm sm:text-base lg:text-lg text-zinc-300 leading-relaxed">
-                          {p}
-                        </p>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-zinc-500 font-mono text-sm italic">
-                      [ Slide Layout Ready ]
-                    </p>
-                  )}
+                  <div className="my-auto py-4 space-y-4">
+                    {currentSlide?.bulletPoints && currentSlide.bulletPoints.length > 0 ? (
+                      <ul className="space-y-3 max-w-3xl">
+                        {currentSlide.bulletPoints.map((bullet, idx) => (
+                          <li key={idx} className="flex items-start gap-3 text-sm sm:text-base lg:text-lg text-zinc-200">
+                            <span className="text-amber-400 mt-1 shrink-0 font-bold">▪</span>
+                            <span className="leading-relaxed">{bullet}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : currentSlide?.paragraphs && currentSlide.paragraphs.length > 0 ? (
+                      <div className="space-y-3 max-w-3xl">
+                        {currentSlide.paragraphs.map((p, idx) => (
+                          <p key={idx} className="text-sm sm:text-base lg:text-lg text-zinc-300 leading-relaxed">
+                            {p}
+                          </p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-zinc-500 font-mono text-sm italic">
+                        [ Empty Slide ]
+                      </p>
+                    )}
 
-                  {/* Embedded Images if available */}
-                  {currentSlide?.images && currentSlide.images.length > 0 && (
-                    <div className="flex flex-wrap gap-4 pt-3">
-                      {currentSlide.images.map((img, idx) => (
-                        <img
-                          key={idx}
-                          src={img.url}
-                          alt={img.name}
-                          className="max-h-40 rounded-xl border border-white/10 shadow-lg object-contain bg-zinc-900/50"
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
+                    {currentSlide?.images && currentSlide.images.length > 0 && (
+                      <div className="flex flex-wrap gap-4 pt-3">
+                        {currentSlide.images.map((img, idx) => (
+                          <img
+                            key={idx}
+                            src={img.url}
+                            alt={img.name}
+                            className="max-h-40 rounded-xl border border-white/10 shadow-lg object-contain bg-zinc-900/50"
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-                {/* Slide Footer */}
-                <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 pt-4 border-t border-white/10">
-                  <span className="truncate max-w-[250px]">{file.originalName}</span>
-                  <span>{currentSlideIndex} / {totalSlides}</span>
+                  <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 pt-4 border-t border-white/10">
+                    <span className="truncate max-w-[250px]">{file.originalName}</span>
+                    <span>{currentSlideIndex} / {totalSlides}</span>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Annotation Canvas Overlay */}
               <canvas

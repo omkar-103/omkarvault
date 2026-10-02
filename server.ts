@@ -154,6 +154,38 @@ function auditLog(event: string, details?: Record<string, unknown>) {
 // ─────────────────────────────────────────────
 // Vault Types
 // ─────────────────────────────────────────────
+export interface PlacedImage {
+  name: string;
+  url: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  isBackground?: boolean;
+}
+
+export interface TextRun {
+  text: string;
+  fontSize?: number;
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+  fontFamily?: string;
+}
+
+export interface TextParagraph {
+  align: 'left' | 'center' | 'right' | 'justify';
+  runs: TextRun[];
+}
+
+export interface PlacedText {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  paragraphs: TextParagraph[];
+}
+
 export interface SlideData {
   index: number;
   title: string;
@@ -161,9 +193,13 @@ export interface SlideData {
   paragraphs: string[];
   bulletPoints: string[];
   backgroundColor?: string;
+  backgroundImageUrl?: string;
   hasImages: boolean;
   images: Array<{ name: string; url: string }>;
+  placedImages?: PlacedImage[];
+  placedTexts?: PlacedText[];
   shapesCount: number;
+  aspectRatio?: number;
 }
 
 export interface PresentationMeta {
@@ -349,6 +385,20 @@ async function parsePptxBuffer(buffer: Buffer, fileId: string): Promise<Presenta
   try {
     const zip = await JSZip.loadAsync(buffer);
 
+    // Read slide dimensions from presentation.xml
+    let slideWidth = 18288000;
+    let slideHeight = 10287000;
+    const presFile = zip.file('ppt/presentation.xml');
+    if (presFile) {
+      const presXml = await presFile.async('text');
+      const szMatch = presXml.match(/<p:sldSz\s+cx="(\d+)"\s+cy="(\d+)"/);
+      if (szMatch) {
+        slideWidth = parseInt(szMatch[1], 10);
+        slideHeight = parseInt(szMatch[2], 10);
+      }
+    }
+    const aspectRatio = Number((slideWidth / slideHeight).toFixed(3));
+
     const slideEntries: { name: string; index: number; file: JSZip.JSZipObject }[] = [];
     zip.forEach((relativePath, file) => {
       const match = relativePath.match(/^ppt\/slides\/slide(\d+)\.xml$/i);
@@ -365,70 +415,160 @@ async function parsePptxBuffer(buffer: Buffer, fileId: string): Promise<Presenta
       const entry = slideEntries[i];
       const xmlText = await entry.file.async('text');
 
-      const paragraphMatches = xmlText.match(/<a:p[\s\S]*?<\/a:p>/gi) || [];
-      const paragraphs: string[] = [];
-      const bullets: string[] = [];
-      let title = '';
+      // 1. Build map of relationship IDs to media URLs
+      const relsPath = `ppt/slides/_rels/slide${entry.index}.xml.rels`;
+      const relsFile = zip.file(relsPath);
+      const relsMap: Record<string, { name: string; url: string }> = {};
+      const allImages: Array<{ name: string; url: string }> = [];
 
-      for (const pXml of paragraphMatches) {
-        const tMatches = pXml.match(/<a:t[^>]*>([\s\S]*?)<\/a:t>/gi) || [];
-        const fullParagraphText = tMatches
-          .map((m) => m.replace(/<[^>]+>/g, '').trim())
-          .filter((t) => t.length > 0)
-          .join(' ')
-          .trim();
-
-        if (!fullParagraphText) continue;
-
-        const isBullet = /<a:buChar|<a:buAutoNum/i.test(pXml);
-
-        if (!title && (pXml.includes('title') || fullParagraphText.length < 90)) {
-          title = fullParagraphText;
-        } else if (isBullet) {
-          bullets.push(fullParagraphText);
-        } else {
-          paragraphs.push(fullParagraphText);
+      if (relsFile) {
+        const relsXml = await relsFile.async('text');
+        const relMatches = relsXml.matchAll(/Id="([^"]+)"[^>]*Target="(?:\.\.\/media\/)?([^"]+)"/g);
+        for (const m of relMatches) {
+          const rId = m[1];
+          const mediaName = m[2].replace(/^.*[\\\/]/, '');
+          const imgUrl = `/api/files/${fileId}/slides/${i + 1}/media/${encodeURIComponent(mediaName)}`;
+          relsMap[rId] = { name: mediaName, url: imgUrl };
+          allImages.push({ name: mediaName, url: imgUrl });
         }
       }
 
-      if (!title) {
-        title = paragraphs.length > 0 ? paragraphs[0] : `Slide ${i + 1}`;
-      }
-
+      // 2. Extract slide background color if present
       let backgroundColor: string | undefined;
       const bgClrMatch = xmlText.match(/<a:srgbClr\s+val="([0-9a-fA-F]{6})"/i);
       if (bgClrMatch) backgroundColor = '#' + bgClrMatch[1];
 
-      const relsPath = `ppt/slides/_rels/slide${entry.index}.xml.rels`;
-      const relsFile = zip.file(relsPath);
-      const images: Array<{ name: string; url: string }> = [];
+      // 3. Extract all shapes and their positions (word boundary prevents matching p:spTree)
+      const spMatches = xmlText.match(/<(?:p:sp|p:pic|p:grpSp)\b[\s\S]*?<\/(?:p:sp|p:pic|p:grpSp)>/g) || [];
+      const placedImages: PlacedImage[] = [];
+      const placedTexts: PlacedText[] = [];
+      const rawParagraphs: string[] = [];
+      const rawBullets: string[] = [];
+      let backgroundImageUrl: string | undefined;
 
-      if (relsFile) {
-        const relsXml = await relsFile.async('text');
-        const imgMatches = relsXml.match(/Target="\.\.\/media\/([^"]+)"/gi) || [];
-        for (const imgTag of imgMatches) {
-          const m = imgTag.match(/Target="\.\.\/media\/([^"]+)"/i);
-          if (m && m[1]) {
-            images.push({
-              name: m[1],
-              url: `/api/files/${fileId}/slides/${i + 1}/media/${encodeURIComponent(m[1])}`,
+      for (const sp of spMatches) {
+        // Position transform (handles both positive and negative offsets)
+        const xfrmMatch = sp.match(/<a:off\s+x="(-?\d+)"\s+y="(-?\d+)"\s*\/><a:ext\s+cx="(\d+)"\s+cy="(\d+)"\s*\/>/);
+        let left = 0;
+        let top = 0;
+        let width = 100;
+        let height = 100;
+
+        if (xfrmMatch) {
+          const x = parseInt(xfrmMatch[1], 10);
+          const y = parseInt(xfrmMatch[2], 10);
+          const cx = parseInt(xfrmMatch[3], 10);
+          const cy = parseInt(xfrmMatch[4], 10);
+
+          left = Number(((x / slideWidth) * 100).toFixed(2));
+          top = Number(((y / slideHeight) * 100).toFixed(2));
+          width = Number(((cx / slideWidth) * 100).toFixed(2));
+          height = Number(((cy / slideHeight) * 100).toFixed(2));
+        }
+
+        // Check if shape contains an image
+        const blipMatch = sp.match(/<a:blip[^>]*r:embed="([^"]+)"/);
+        if (blipMatch && relsMap[blipMatch[1]]) {
+          const img = relsMap[blipMatch[1]];
+          const isFullBleed = (left <= 2 && top <= 2 && width >= 85 && height >= 85) ||
+                             (left <= 0 && top <= 0 && width >= 80);
+
+          if (isFullBleed && !backgroundImageUrl) {
+            backgroundImageUrl = img.url;
+          } else {
+            placedImages.push({
+              name: img.name,
+              url: img.url,
+              left,
+              top,
+              width,
+              height,
             });
           }
         }
+
+        // Check if shape contains text
+        const pMatches = sp.match(/<a:p[\s\S]*?<\/a:p>/g) || [];
+        const paragraphs: TextParagraph[] = [];
+
+        for (const pXml of pMatches) {
+          const alignMatch = pXml.match(/<a:pPr[^>]*algn="([^"]+)"/);
+          let align: TextParagraph['align'] = 'left';
+          if (alignMatch) {
+            if (alignMatch[1] === 'ctr') align = 'center';
+            else if (alignMatch[1] === 'r') align = 'right';
+            else if (alignMatch[1] === 'just') align = 'justify';
+          }
+
+          const runs: TextRun[] = [];
+          const rMatches = pXml.match(/<a:r[\s\S]*?<\/a:r>/g) || [];
+
+          for (const rXml of rMatches) {
+            const tMatch = rXml.match(/<a:t[^>]*>([\s\S]*?)<\/a:t>/);
+            if (!tMatch) continue;
+            const text = tMatch[1].replace(/<[^>]+>/g, '');
+            if (!text.trim()) continue;
+
+            const szMatch = rXml.match(/sz="(\d+)"/);
+            const fontSize = szMatch ? parseInt(szMatch[1], 10) / 100 : undefined;
+            const bold = /b="(?:1|true)"/i.test(rXml);
+            const italic = /i="(?:1|true)"/i.test(rXml);
+
+            const colorMatch = rXml.match(/<a:srgbClr\s+val="([0-9a-fA-F]{6})"/i);
+            const color = colorMatch ? `#${colorMatch[1]}` : undefined;
+
+            const fontMatch = rXml.match(/typeface="([^"]+)"/);
+            const fontFamily = fontMatch ? fontMatch[1] : undefined;
+
+            runs.push({ text, fontSize, bold, italic, color, fontFamily });
+          }
+
+          if (runs.length > 0) {
+            paragraphs.push({ align, runs });
+            const pText = runs.map((r) => r.text).join(' ');
+            if (/<a:buChar|<a:buAutoNum/i.test(pXml)) {
+              rawBullets.push(pText);
+            } else {
+              rawParagraphs.push(pText);
+            }
+          }
+        }
+
+        if (paragraphs.length > 0) {
+          placedTexts.push({
+            left,
+            top,
+            width,
+            height,
+            paragraphs,
+          });
+        }
       }
 
-      const shapesCount = (xmlText.match(/<p:sp>/gi) || []).length;
+      // If no full-bleed background was found but images exist, check if first image is large
+      if (!backgroundImageUrl && allImages.length > 0 && placedImages.length > 0) {
+        if (placedImages[0].width >= 70 && placedImages[0].height >= 70) {
+          backgroundImageUrl = placedImages[0].url;
+          placedImages.shift();
+        }
+      }
+
+      const title = rawParagraphs[0] || rawBullets[0] || `Slide ${i + 1}`;
 
       slides.push({
         index: i + 1,
         title,
-        subtitles: paragraphs.slice(0, 2),
-        paragraphs,
-        bulletPoints: bullets,
+        subtitles: rawParagraphs.slice(1, 3),
+        paragraphs: rawParagraphs,
+        bulletPoints: rawBullets,
         backgroundColor,
-        hasImages: images.length > 0,
-        images,
-        shapesCount,
+        backgroundImageUrl,
+        hasImages: allImages.length > 0,
+        images: allImages,
+        placedImages,
+        placedTexts,
+        shapesCount: spMatches.length,
+        aspectRatio,
       });
     }
 
@@ -442,6 +582,7 @@ async function parsePptxBuffer(buffer: Buffer, fileId: string): Promise<Presenta
         hasImages: false,
         images: [],
         shapesCount: 1,
+        aspectRatio: 1.778,
       });
     }
 
@@ -866,11 +1007,12 @@ apiRouter.get('/files/:id/presentation', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);
   if (!file) return res.status(404).json({ error: 'Presentation not found.' });
 
-  if (file.presentationMeta && file.presentationMeta.status === 'ready') {
+  const hasRichLayout = file.presentationMeta?.slides?.some((s) => s.backgroundImageUrl || (s.placedTexts && s.placedTexts.length > 0));
+  if (file.presentationMeta && file.presentationMeta.status === 'ready' && hasRichLayout && req.query.force !== 'true') {
     return res.json({ presentation: file.presentationMeta });
   }
 
-  // Re-parse if not ready
+  // Re-parse if not ready or if older format lacking rich layout positioning
   try {
     const buffer = await downloadFromStorage(file.storageKey);
     const meta = await parsePptxBuffer(buffer, file.id);

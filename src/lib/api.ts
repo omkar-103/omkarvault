@@ -139,10 +139,42 @@ export async function uploadFile(
   file: File,
   onProgress?: (percent: number) => void
 ): Promise<VaultFile> {
-  return new Promise((resolve, reject) => {
+  // Step 1: Request signed upload URL from server (bypasses Vercel 4.5MB limit)
+  const prepareUrl = cachedToken
+    ? `/api/files/prepare-upload?token=${encodeURIComponent(cachedToken)}`
+    : '/api/files/prepare-upload';
+
+  const prepareRes = await fetch(prepareUrl, {
+    method: 'POST',
+    headers: {
+      ...getAuthHeaders(),
+      'Content-Type': 'application/json',
+    },
+    credentials: 'same-origin',
+    body: JSON.stringify({
+      filename: file.name,
+      size: file.size,
+      mimeType: file.type || 'application/octet-stream',
+    }),
+  });
+
+  if (!prepareRes.ok) {
+    if (prepareRes.status === 401) throw new Error('UNAUTHORIZED');
+    let errText = 'Failed to initiate upload';
+    try {
+      const errJson = await prepareRes.json();
+      errText = errJson.error || errText;
+    } catch {}
+    throw new Error(errText);
+  }
+
+  const { fileId, storageKey, signedUrl } = await prepareRes.json();
+
+  // Step 2: Upload directly to Supabase Storage signed URL with real-time progress
+  await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    const formData = new FormData();
-    formData.append('file', file);
+    xhr.open('PUT', signedUrl);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
 
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable && onProgress) {
@@ -153,37 +185,56 @@ export async function uploadFile(
 
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const res = JSON.parse(xhr.responseText);
-          resolve(res.file);
-        } catch {
-          reject(new Error('Invalid upload response'));
-        }
+        resolve();
       } else {
-        try {
-          const res = JSON.parse(xhr.responseText);
-          reject(new Error(res.error || 'Upload failed'));
-        } catch {
-          reject(new Error(`Upload failed with status ${xhr.status}`));
-        }
+        reject(new Error(`Storage direct upload failed with status ${xhr.status}`));
       }
     });
 
     xhr.addEventListener('error', () => {
-      reject(new Error('Network error during upload'));
+      reject(new Error('Network error during file upload'));
     });
 
-    const uploadUrl = cachedToken
-      ? `/api/files/upload?token=${encodeURIComponent(cachedToken)}`
-      : '/api/files/upload';
+    xhr.addEventListener('abort', () => {
+      reject(new Error('Upload aborted'));
+    });
 
-    xhr.open('POST', uploadUrl);
-    if (cachedToken) {
-      xhr.setRequestHeader('Authorization', `Bearer ${cachedToken}`);
-    }
-    xhr.withCredentials = true;
-    xhr.send(formData);
+    xhr.send(file);
   });
+
+  // Step 3: Complete upload and store metadata in PostgreSQL
+  const completeUrl = cachedToken
+    ? `/api/files/complete-upload?token=${encodeURIComponent(cachedToken)}`
+    : '/api/files/complete-upload';
+
+  const completeRes = await fetch(completeUrl, {
+    method: 'POST',
+    headers: {
+      ...getAuthHeaders(),
+      'Content-Type': 'application/json',
+    },
+    credentials: 'same-origin',
+    body: JSON.stringify({
+      fileId,
+      storageKey,
+      originalName: file.name,
+      sizeBytes: file.size,
+      mimeType: file.type || 'application/octet-stream',
+    }),
+  });
+
+  if (!completeRes.ok) {
+    if (completeRes.status === 401) throw new Error('UNAUTHORIZED');
+    let errText = 'Failed to finalize file metadata';
+    try {
+      const errJson = await completeRes.json();
+      errText = errJson.error || errText;
+    } catch {}
+    throw new Error(errText);
+  }
+
+  const completeData = await completeRes.json();
+  return completeData.file;
 }
 
 export async function deleteFile(id: string): Promise<boolean> {

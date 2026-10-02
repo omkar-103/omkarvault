@@ -692,6 +692,122 @@ apiRouter.post('/files/upload', requireAuth, upload.single('file'), async (req, 
   }
 });
 
+// 5b. Prepare Direct Upload (bypasses Vercel 4.5MB serverless body limit)
+apiRouter.post('/files/prepare-upload', requireAuth, async (req, res) => {
+  if (!isSupabaseConfigured) {
+    return res.status(503).json({
+      error: 'Supabase credentials not configured in Vercel environment variables. Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY in Vercel Project Settings.',
+    });
+  }
+
+  const { filename, size } = req.body;
+  if (!filename || typeof filename !== 'string') {
+    return res.status(400).json({ error: 'Filename is required.' });
+  }
+
+  const originalName = path.basename(filename).replace(/[\r\n\t]/g, '');
+  const ext = path.extname(originalName).toLowerCase();
+  const dangerous = ['.exe', '.bat', '.sh', '.cmd', '.vbs', '.com', '.scr', '.pif', '.ps1'];
+  if (dangerous.includes(ext)) {
+    return res.status(400).json({ error: 'Executable and script file uploads are strictly prohibited.' });
+  }
+
+  if (size && Number(size) > MAX_FILE_SIZE_MB * 1024 * 1024) {
+    return res.status(400).json({ error: `File exceeds maximum limit of ${MAX_FILE_SIZE_MB} MB.` });
+  }
+
+  const fileId = crypto.randomUUID();
+  const sanitizedName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const storageKey = `files/${fileId}/${sanitizedName}`;
+
+  try {
+    const { data, error } = await supabaseAdmin.storage
+      .from(STORAGE_BUCKET)
+      .createSignedUploadUrl(storageKey);
+
+    if (error || !data?.signedUrl) {
+      throw new Error(`Failed to generate signed upload URL: ${error?.message || 'unknown error'}`);
+    }
+
+    return res.json({
+      fileId,
+      storageKey,
+      signedUrl: data.signedUrl,
+      token: data.token,
+    });
+  } catch (err: any) {
+    console.error('prepare-upload error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to prepare upload.' });
+  }
+});
+
+// 5c. Complete Direct Upload (saves metadata to DB and triggers PPTX slide processing)
+apiRouter.post('/files/complete-upload', requireAuth, async (req, res) => {
+  if (!isSupabaseConfigured) {
+    return res.status(503).json({
+      error: 'Supabase credentials not configured in Vercel environment variables.',
+    });
+  }
+
+  const { fileId, storageKey, originalName, sizeBytes, mimeType } = req.body;
+  if (!fileId || !storageKey || !originalName) {
+    return res.status(400).json({ error: 'Missing required upload completion fields.' });
+  }
+
+  const ext = path.extname(originalName).toLowerCase();
+  const category = getFileCategory(ext);
+
+  const newFileRecord: VaultFile = {
+    id: fileId,
+    originalName,
+    storageKey,
+    mimeType: mimeType || 'application/octet-stream',
+    extension: ext.replace('.', ''),
+    sizeBytes: Number(sizeBytes) || 0,
+    category,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    if (category === 'presentation' && (ext === '.pptx' || ext === '.ppt')) {
+      newFileRecord.presentationMeta = {
+        slideCount: 0,
+        slides: [],
+        processedAt: new Date().toISOString(),
+        status: 'processing',
+      };
+
+      await dbInsertFile(newFileRecord);
+
+      // Asynchronously download from Supabase Storage and parse presentation slides
+      downloadFromStorage(storageKey)
+        .then(async (buffer) => {
+          const presMeta = await parsePptxBuffer(buffer, fileId);
+          await dbUpdatePresentationMeta(fileId, presMeta);
+          auditLog('PPTX_PROCESSED', { fileId, slideCount: presMeta.slideCount });
+        })
+        .catch(async (err) => {
+          console.error('Failed to parse presentation in complete-upload:', err);
+          await dbUpdatePresentationMeta(fileId, {
+            slideCount: 0,
+            slides: [],
+            processedAt: new Date().toISOString(),
+            status: 'failed',
+          });
+        });
+    } else {
+      await dbInsertFile(newFileRecord);
+    }
+
+    auditLog('FILE_UPLOADED', { fileId, name: originalName, size: sizeBytes, category, ip: getClientIp(req) });
+    return res.status(201).json({ success: true, file: newFileRecord });
+  } catch (err: any) {
+    console.error('complete-upload error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to complete upload.' });
+  }
+});
+
 // 6. Get File Details
 apiRouter.get('/files/:id', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);

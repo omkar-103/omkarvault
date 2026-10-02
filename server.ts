@@ -250,6 +250,13 @@ async function getSignedUrl(storageKey: string, expiresInSeconds = 60): Promise<
 // ─────────────────────────────────────────────
 
 function mapRowToVaultFile(row: Record<string, unknown>): VaultFile {
+  const toIso = (val: unknown): string => {
+    if (!val) return new Date().toISOString();
+    if (typeof val === 'string') return val;
+    if (val instanceof Date) return val.toISOString();
+    return new Date(String(val)).toISOString();
+  };
+
   return {
     id: row.id as string,
     originalName: row.original_name as string,
@@ -258,8 +265,8 @@ function mapRowToVaultFile(row: Record<string, unknown>): VaultFile {
     extension: row.extension as string,
     sizeBytes: Number(row.size_bytes),
     category: row.category as VaultFile['category'],
-    createdAt: (row.created_at as Date).toISOString(),
-    updatedAt: (row.updated_at as Date).toISOString(),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
     presentationMeta: row.presentation_meta ? (row.presentation_meta as PresentationMeta) : undefined,
   };
 }

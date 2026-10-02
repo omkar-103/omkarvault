@@ -84,10 +84,11 @@ In your Supabase dashboard → SQL Editor, run:
 -- contents of supabase/migrations/001_vault_files.sql
 ```
 
-Or run the migration file directly:
+Or run the migration script directly using your DATABASE_URL:
 ```bash
-# Copy the SQL from supabase/migrations/001_vault_files.sql and paste into Supabase SQL Editor
+npm run migrate
 ```
+Or paste the contents of `supabase/migrations/001_vault_files.sql` into the Supabase SQL Editor.
 
 ### 3. Get Your Credentials
 

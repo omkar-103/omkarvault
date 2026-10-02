@@ -6,6 +6,11 @@
  * Only import this file from server-side code (Express routes, server.ts).
  */
 
+// Load .env.local then .env so env vars are available at module initialization time
+import { config as dotenvConfig } from 'dotenv';
+dotenvConfig({ path: '.env.local' });
+dotenvConfig();
+
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;

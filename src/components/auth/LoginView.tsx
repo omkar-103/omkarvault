@@ -14,8 +14,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lockCountdown, setLockCountdown] = useState<number>(0);
+  const [isFocused, setIsFocused] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Automatically focus on mount
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -42,133 +44,167 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
     setIsLoading(true);
     setError(null);
 
-    const result = await login(password);
-    setIsLoading(false);
+    try {
+      const result = await login(password);
+      setIsLoading(false);
 
-    if (result.success) {
-      onSuccess();
-    } else {
-      setError(result.error || 'Invalid password.');
-      if (result.remainingSec && result.remainingSec > 0) {
-        setLockCountdown(result.remainingSec);
+      if (result.success) {
+        onSuccess();
+      } else {
+        setError(result.error || 'Invalid passkey.');
+        if (result.remainingSec && result.remainingSec > 0) {
+          setLockCountdown(result.remainingSec);
+        }
+        // Clear password on error and refocus
+        setPassword('');
+        inputRef.current?.focus();
       }
-      // Clear password on error
+    } catch {
+      setIsLoading(false);
+      setError('Connection error. Please try again.');
       setPassword('');
       inputRef.current?.focus();
     }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Clean input: remove whitespace
     const val = e.target.value.replace(/\s+/g, '');
     if (val.length <= PASSKEY_LENGTH) {
       setPassword(val);
-      setError(null);
-      if (val.length === PASSKEY_LENGTH) {
-        // Auto-submit on completion
-        setTimeout(() => {
-          login(val).then((res) => {
-            if (res.success) {
-              onSuccess();
-            } else {
-              setError(res.error || 'Invalid password.');
-              if (res.remainingSec && res.remainingSec > 0) {
-                setLockCountdown(res.remainingSec);
-              }
-              setPassword('');
-              inputRef.current?.focus();
-            }
-          });
-        }, 120);
+      if (error) setError(null);
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\s+/g, '');
+    const clean = pasted.slice(0, PASSKEY_LENGTH);
+    if (clean) {
+      setPassword(clean);
+      if (error) setError(null);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (password.length === PASSKEY_LENGTH && !isLoading && lockCountdown > 0) return;
+      if (password.length === PASSKEY_LENGTH && !isLoading) {
+        handleSubmit();
       }
     }
   };
 
+  const isComplete = password.length === PASSKEY_LENGTH;
+  const isButtonDisabled = !isComplete || isLoading || lockCountdown > 0;
+
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden select-none">
-      {/* Background ambient texture */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_var(--tw-gradient-stops))] from-amber-500/5 via-transparent to-transparent pointer-events-none" />
-      
-      <div className="w-full max-w-lg relative z-10">
+      {/* Background ambient lighting */}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_var(--tw-gradient-stops))] from-amber-500/10 via-transparent to-transparent pointer-events-none" />
+
+      <div className="w-full max-w-md relative z-10">
         {/* Header Branding */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-zinc-900 border border-zinc-800 text-amber-500 shadow-xl mb-4">
+        <div className="text-center mb-7">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-zinc-900 border border-zinc-800 text-amber-500 shadow-xl shadow-amber-500/5 mb-3.5">
             <Shield className="w-7 h-7" strokeWidth={1.75} />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-zinc-100 font-sans">
             AEGIS VAULT
           </h1>
-          <p className="text-xs text-zinc-500 mt-1 font-mono tracking-wide">
+          <p className="text-xs text-zinc-400 mt-1.5 font-mono tracking-widest uppercase">
             CONFIDENTIAL SECURE WORKSPACE
           </p>
         </div>
 
         {/* Vault Key Card */}
-        <div className="bg-zinc-900/80 border border-zinc-800/80 rounded-2xl p-6 sm:p-8 backdrop-blur-xl shadow-2xl">
-          <div className="flex items-center justify-between mb-5">
-            <span className="text-xs font-mono text-zinc-400 flex items-center gap-1.5">
-              <Lock className="w-3.5 h-3.5 text-amber-500/80" />
+        <div className="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-5 sm:p-7 backdrop-blur-xl shadow-2xl shadow-black/80">
+          {/* Card Subheader: Label & Reveal Toggle */}
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs font-mono font-semibold text-zinc-300 flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-amber-400" />
               {PASSKEY_LENGTH}-CHARACTER PASSKEY
             </span>
             <button
               type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1 cursor-pointer focus:outline-none focus-visible:text-amber-400"
+              onClick={() => {
+                setShowPassword(!showPassword);
+                inputRef.current?.focus();
+              }}
+              className="text-xs font-mono font-medium text-zinc-400 hover:text-amber-400 transition-colors flex items-center gap-1.5 cursor-pointer focus:outline-none focus-visible:text-amber-400"
+              aria-label={showPassword ? 'Hide passcode' : 'Reveal passcode'}
             >
               {showPassword ? (
                 <>
-                  <EyeOff className="w-3.5 h-3.5" /> Hide
+                  <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Hide</span>
                 </>
               ) : (
                 <>
-                  <Eye className="w-3.5 h-3.5" /> Reveal
+                  <Eye className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Reveal</span>
                 </>
               )}
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Hidden native input for mobile & typing ergonomics */}
-            <div className="relative">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {/* Unified Input Container: Single logical input backing 8 visual slots */}
+            <div
+              className="relative cursor-text"
+              onClick={() => inputRef.current?.focus()}
+            >
+              {/* Invisible native input for keyboard, touch, paste, and assistive tech */}
               <input
                 ref={inputRef}
-                type={showPassword ? 'text' : 'password'}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 maxLength={PASSKEY_LENGTH}
                 value={password}
                 onChange={handleChange}
+                onPaste={handlePaste}
+                onKeyDown={handleKeyDown}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
                 disabled={isLoading || lockCountdown > 0}
-                className="opacity-0 absolute inset-0 w-full h-full cursor-pointer z-20"
+                className="opacity-0 absolute inset-0 w-full h-full cursor-text z-20"
                 autoComplete="off"
+                aria-label="8-character security passkey"
                 autoFocus
               />
 
               {/* Visual 8-slot PIN interface */}
-              <div className="grid grid-cols-8 gap-1.5 sm:gap-2 py-1">
+              <div className="grid grid-cols-8 gap-1 sm:gap-2">
                 {Array.from({ length: PASSKEY_LENGTH }).map((_, index) => {
                   const char = password[index] || '';
-                  const isCurrent = password.length === index && lockCountdown === 0;
+                  const isCurrent = password.length === index && lockCountdown === 0 && isFocused;
                   const isFilled = index < password.length;
+
+                  let slotClasses = 'border-zinc-800 bg-zinc-950/70 text-zinc-500';
+
+                  if (error) {
+                    slotClasses = 'border-red-500/80 bg-red-950/30 text-red-300';
+                  } else if (isCurrent) {
+                    slotClasses = 'border-amber-500 bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/50 shadow-[0_0_12px_rgba(245,158,11,0.25)]';
+                  } else if (isFilled) {
+                    slotClasses = 'border-zinc-700 bg-zinc-800/90 text-zinc-100';
+                  }
 
                   return (
                     <div
                       key={index}
-                      className={`h-12 sm:h-14 rounded-xl flex items-center justify-center font-mono text-lg sm:text-xl font-bold transition-all duration-150 border ${
-                        error
-                          ? 'border-red-500/60 bg-red-950/20 text-red-300'
-                          : isCurrent
-                          ? 'border-amber-500 bg-amber-500/10 text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.2)]'
-                          : isFilled
-                          ? 'border-zinc-700 bg-zinc-800 text-zinc-100'
-                          : 'border-zinc-800/80 bg-zinc-950/50 text-zinc-600'
-                      }`}
+                      className={`h-11 sm:h-13 rounded-xl flex items-center justify-center font-mono text-base sm:text-lg font-bold transition-all duration-150 border ${slotClasses}`}
                     >
                       {char ? (
                         showPassword ? (
-                          char
+                          <span className="text-zinc-100">{char}</span>
                         ) : (
-                          <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(245,158,11,0.4)] inline-block" />
                         )
                       ) : isCurrent ? (
-                        <span className="w-0.5 h-5 bg-amber-400 animate-pulse" />
+                        <span className="w-0.5 h-4 sm:h-5 bg-amber-400 animate-pulse rounded-full" />
                       ) : null}
                     </div>
                   );
@@ -178,48 +214,48 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
 
             {/* Error & Lockout Banner */}
             {lockCountdown > 0 ? (
-              <div className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+              <div className="flex items-center gap-2 text-xs font-mono text-amber-400 bg-amber-500/10 border border-amber-500/25 rounded-xl p-3">
                 <Clock className="w-4 h-4 shrink-0 animate-spin" />
                 <span>
-                  Vault temporarily locked due to repeated attempts. Retry in{' '}
-                  <strong className="font-mono tabular-nums">{lockCountdown}s</strong>.
+                  Vault temporarily locked. Retry in{' '}
+                  <strong className="font-bold tabular-nums">{lockCountdown}s</strong>.
                 </span>
               </div>
             ) : error ? (
-              <div className="flex items-center gap-2 text-xs text-red-400 bg-red-950/30 border border-red-500/20 rounded-lg p-3">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{typeof error === 'string' ? error : 'Authentication failed'}</span>
+              <div className="flex items-center justify-center gap-2 text-xs font-mono text-red-400 bg-red-950/40 border border-red-500/30 rounded-xl p-2.5 animate-in fade-in duration-200">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+                <span>{error}</span>
               </div>
             ) : (
-              <p className="text-[11px] text-zinc-500 text-center font-mono">
-                Isolated single-administrator access. No public registration.
+              <p className="text-[11px] text-zinc-400 text-center font-mono tracking-wide">
+                Single-administrator access. All operations audit-logged.
               </p>
             )}
 
-            {/* Submit Button */}
+            {/* Submit Button with High Contrast & Clear State Transitions */}
             <button
               type="submit"
-              disabled={password.length !== PASSKEY_LENGTH || isLoading || lockCountdown > 0}
-              className={`w-full py-3 px-4 rounded-xl text-xs font-semibold tracking-wider font-mono uppercase transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 ${
-                password.length === PASSKEY_LENGTH && !isLoading && lockCountdown === 0
-                  ? 'bg-amber-500 hover:bg-amber-400 text-zinc-950 shadow-lg shadow-amber-500/20 active:scale-[0.99]'
-                  : 'bg-zinc-800/80 text-zinc-500 cursor-not-allowed border border-zinc-800'
+              disabled={isButtonDisabled}
+              className={`w-full py-3 px-4 rounded-xl text-xs font-bold font-mono tracking-widest uppercase transition-all duration-150 flex items-center justify-center gap-2 select-none ${
+                isComplete && !isLoading && lockCountdown === 0
+                  ? 'bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-zinc-950 border border-amber-400/80 shadow-[0_0_20px_rgba(245,158,11,0.3)] cursor-pointer active:scale-[0.98]'
+                  : 'bg-zinc-800/90 text-zinc-300 border border-zinc-700/80 cursor-not-allowed opacity-80'
               }`}
             >
               {isLoading ? (
                 <>
                   <span className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
-                  AUTHENTICATING...
+                  <span>AUTHENTICATING...</span>
                 </>
               ) : (
-                'ENTER VAULT'
+                <span>ENTER VAULT</span>
               )}
             </button>
           </form>
         </div>
 
-        {/* Security watermark footer */}
-        <div className="text-center mt-6 text-zinc-600 text-[11px] font-mono tracking-tight">
+        {/* Security Watermark Footer */}
+        <div className="text-center mt-6 text-zinc-400 text-[11px] font-mono tracking-wider">
           SHA-256 · HTTP-ONLY SESSION · ZERO EXTERNAL STORAGE LEAKS
         </div>
       </div>

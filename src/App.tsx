@@ -12,7 +12,7 @@ import { FileList } from './components/vault/FileList';
 import { EmptyState } from './components/vault/EmptyState';
 import { FileUploader } from './components/vault/FileUploader';
 import { DeleteModal } from './components/vault/DeleteModal';
-import { PDFViewerModal } from './components/preview/PDFViewerModal';
+import { PDFPresentationModal } from './components/preview/PDFPresentationModal';
 import { PresentationViewerModal } from './components/preview/PresentationViewerModal';
 import { ImageViewerModal } from './components/preview/ImageViewerModal';
 import { GenericFileModal } from './components/preview/GenericFileModal';
@@ -239,7 +239,7 @@ export default function App() {
       />
 
       {/* 3. Presentation Viewer Modal (PPT/PPTX) */}
-      {viewingFile && viewingFile.category === 'presentation' && (
+      {viewingFile && viewingFile.category === 'presentation' && viewingFile.extension !== 'pdf' && (
         <PresentationViewerModal
           file={viewingFile}
           isOpen={true}
@@ -248,9 +248,9 @@ export default function App() {
         />
       )}
 
-      {/* 4. PDF Viewer Modal */}
+      {/* 4. PDF Presentation Modal (each page = slide, neo-brutalism viewer) */}
       {viewingFile && viewingFile.extension === 'pdf' && (
-        <PDFViewerModal
+        <PDFPresentationModal
           file={viewingFile}
           isOpen={true}
           onClose={() => setViewingFile(null)}

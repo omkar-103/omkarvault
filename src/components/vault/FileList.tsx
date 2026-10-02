@@ -294,14 +294,14 @@ export const FileList: React.FC<FileListProps> = ({
                     <Clock className="w-3 h-3 text-zinc-600" />
                     {formatDate(file.createdAt)}
                   </span>
-                  {canPreview && (
-                    <button
-                      onClick={() => onViewFile(file)}
-                      className="text-xs text-amber-500 hover:text-amber-400 font-semibold transition-colors flex items-center gap-1 cursor-pointer"
-                    >
-                      {file.category === 'presentation' ? 'Present' : 'View'} →
-                    </button>
-                  )}
+                    {canPreview && (
+                      <button
+                        onClick={() => onViewFile(file)}
+                        className="text-xs text-amber-500 hover:text-amber-400 font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        {file.category === 'presentation' || file.extension.toLowerCase() === 'pdf' ? 'Present' : 'View'} →
+                      </button>
+                    )}
                 </div>
               </div>
             );
@@ -357,7 +357,7 @@ export const FileList: React.FC<FileListProps> = ({
                             onClick={() => onViewFile(file)}
                             className="px-2.5 py-1 text-xs font-medium text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 rounded-md transition-colors cursor-pointer"
                           >
-                            {file.category === 'presentation' ? 'Present' : 'View'}
+                            {file.category === 'presentation' || file.extension.toLowerCase() === 'pdf' ? 'Present' : 'View'}
                           </button>
                         )}
                         <button

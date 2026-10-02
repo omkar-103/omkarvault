@@ -64,12 +64,36 @@ export async function login(password: string): Promise<{ success: boolean; error
       credentials: 'same-origin',
       body: JSON.stringify({ password }),
     });
-    const data = await res.json();
+
+    const contentType = res.headers.get('content-type') || '';
+    let data: any = {};
+    if (contentType.includes('application/json')) {
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
+    } else {
+      const text = await res.text();
+      data = { error: text || `HTTP ${res.status}` };
+    }
+
     if (!res.ok) {
+      let errorMsg = 'Authentication failed';
+      if (typeof data.error === 'string') {
+        errorMsg = data.error;
+      } else if (data.error && typeof data.error === 'object') {
+        errorMsg = data.error.message || data.error.code || JSON.stringify(data.error);
+      } else if (typeof data.message === 'string') {
+        errorMsg = data.message;
+      } else if (res.status === 404) {
+        errorMsg = 'Vault API not found (404). Ensure Vercel serverless functions are deployed.';
+      }
+
       return {
         success: false,
-        error: data.error || 'Authentication failed',
-        remainingSec: data.remainingSec,
+        error: errorMsg,
+        remainingSec: typeof data.remainingSec === 'number' ? data.remainingSec : undefined,
       };
     }
     if (data.token) {

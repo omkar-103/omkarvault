@@ -188,7 +188,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
             ) : error ? (
               <div className="flex items-center gap-2 text-xs text-red-400 bg-red-950/30 border border-red-500/20 rounded-lg p-3">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
+                <span>{typeof error === 'string' ? error : 'Authentication failed'}</span>
               </div>
             ) : (
               <p className="text-[11px] text-zinc-500 text-center font-mono">

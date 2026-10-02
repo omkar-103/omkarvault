@@ -13,15 +13,17 @@ dotenvConfig();
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY || 'placeholder_secret_key';
 
-if (!supabaseUrl) {
-  throw new Error('[Supabase] SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL environment variable is not set.');
-}
+export const isSupabaseConfigured = Boolean(
+  (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL) &&
+  process.env.SUPABASE_SECRET_KEY &&
+  process.env.SUPABASE_SECRET_KEY !== 'placeholder_secret_key'
+);
 
-if (!supabaseSecretKey) {
-  throw new Error('[Supabase] SUPABASE_SECRET_KEY environment variable is not set. This key must NEVER be exposed to the browser.');
+if (!isSupabaseConfigured) {
+  console.warn('[Supabase Server] WARNING: SUPABASE_URL or SUPABASE_SECRET_KEY is not configured.');
 }
 
 /**

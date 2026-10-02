@@ -23,7 +23,7 @@ dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 // SERVER ONLY import — NEVER import supabaseAdmin in any client component
-import { supabaseAdmin, STORAGE_BUCKET } from './lib/supabase/server.js';
+import { supabaseAdmin, STORAGE_BUCKET, isSupabaseConfigured } from './lib/supabase/server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,13 +35,12 @@ const HOST = '0.0.0.0';
 // Configuration — all sourced from env variables
 // ─────────────────────────────────────────────
 const VAULT_ADMIN_PASSWORD = process.env.VAULT_ADMIN_PASSWORD || '10032006';
-const SESSION_SECRET = process.env.SESSION_SECRET;
+const SESSION_SECRET = process.env.SESSION_SECRET || 'omkar_vault_session_secret_default_key_32_chars';
 const MAX_FILE_SIZE_MB = parseInt(process.env.MAX_FILE_SIZE_MB || '100', 10);
 const SESSION_DURATION_HOURS = parseInt(process.env.SESSION_DURATION_HOURS || '24', 10);
 
-if (!SESSION_SECRET) {
-  console.error('[Vault] FATAL: SESSION_SECRET environment variable is not set. Use a random 32+ char string.');
-  process.exit(1);
+if (!process.env.SESSION_SECRET) {
+  console.warn('[Vault] WARNING: SESSION_SECRET environment variable is not set. Using fallback key.');
 }
 
 // ─────────────────────────────────────────────
@@ -115,21 +114,36 @@ function recordSuccessfulLogin(ip: string): void {
 // ─────────────────────────────────────────────
 // Session Token Helpers
 // ─────────────────────────────────────────────
-function generateSessionToken(): string {
-  const randomBytes = crypto.randomBytes(32).toString('hex');
-  const signature = crypto.createHmac('sha256', SESSION_SECRET!).update(randomBytes).digest('hex');
-  return `${randomBytes}.${signature}`;
+interface TokenPayload {
+  t: number;      // creation time
+  exp: number;    // expiration time
+  nonce: string;  // random nonce
+  ip?: string;
 }
 
-function verifySessionToken(token: string): boolean {
-  if (!token || !token.includes('.')) return false;
-  const [data, signature] = token.split('.');
-  if (!data || !signature) return false;
-  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET!).update(data).digest('hex');
+function generateSessionToken(ip = '127.0.0.1'): string {
+  const now = Date.now();
+  const expiresAt = now + SESSION_DURATION_HOURS * 60 * 60 * 1000;
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const payload: TokenPayload = { t: now, exp: expiresAt, nonce, ip };
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', SESSION_SECRET).update(payloadB64).digest('base64url');
+  return `${payloadB64}.${signature}`;
+}
+
+function verifySessionToken(token: string): { valid: boolean; expiresAt?: number } {
+  if (!token || !token.includes('.')) return { valid: false };
+  const [payloadB64, signature] = token.split('.');
+  if (!payloadB64 || !signature) return { valid: false };
+  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payloadB64).digest('base64url');
   try {
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig));
+    const isSigValid = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig));
+    if (!isSigValid) return { valid: false };
+    const data: TokenPayload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    if (!data.exp || data.exp < Date.now()) return { valid: false };
+    return { valid: true, expiresAt: data.exp };
   } catch {
-    return false;
+    return { valid: false };
   }
 }
 
@@ -495,14 +509,15 @@ function extractToken(req: express.Request): string | undefined {
   return undefined;
 }
 
+const apiRouter = express.Router();
+
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const token = extractToken(req);
-  if (!token || !verifySessionToken(token)) {
+  if (!token) {
     return res.status(401).json({ error: 'Unauthorized. Secure vault session required.', authenticated: false });
   }
-  const session = activeSessions.get(token);
-  if (!session || session.expiresAt < Date.now()) {
-    if (token) activeSessions.delete(token);
+  const verified = verifySessionToken(token);
+  if (!verified.valid) {
     res.clearCookie('vault_session');
     return res.status(401).json({ error: 'Session expired. Please re-authenticate.', authenticated: false });
   }
@@ -514,16 +529,15 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
 // ─────────────────────────────────────────────
 
 // 1. Session Status
-app.get('/api/auth/session', (req, res) => {
+apiRouter.get('/auth/session', (req, res) => {
   const token = extractToken(req);
-  if (!token || !verifySessionToken(token)) return res.json({ authenticated: false });
-  const session = activeSessions.get(token);
-  if (!session || session.expiresAt < Date.now()) {
-    if (token) activeSessions.delete(token);
+  if (!token) return res.json({ authenticated: false });
+  const verified = verifySessionToken(token);
+  if (!verified.valid || !verified.expiresAt) {
     res.clearCookie('vault_session');
     return res.json({ authenticated: false });
   }
-  const remainingHours = Math.max(0, (session.expiresAt - Date.now()) / (1000 * 60 * 60));
+  const remainingHours = Math.max(0, (verified.expiresAt - Date.now()) / (1000 * 60 * 60));
   return res.json({
     authenticated: true,
     expiresInHours: parseFloat(remainingHours.toFixed(1)),
@@ -532,7 +546,7 @@ app.get('/api/auth/session', (req, res) => {
 });
 
 // 2. Login
-app.post('/api/auth/login', (req, res) => {
+apiRouter.post('/auth/login', (req, res) => {
   const ip = getClientIp(req);
   const { allowed, remainingSec } = checkRateLimit(ip);
 
@@ -561,11 +575,7 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   recordSuccessfulLogin(ip);
-  const token = generateSessionToken();
-  const now = Date.now();
-  const expiresAt = now + SESSION_DURATION_HOURS * 60 * 60 * 1000;
-
-  activeSessions.set(token, { token, createdAt: now, expiresAt, ip });
+  const token = generateSessionToken(ip);
 
   res.cookie('vault_session', token, {
     httpOnly: true,
@@ -580,16 +590,21 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // 3. Logout
-app.post('/api/auth/logout', (req, res) => {
-  const token = extractToken(req);
-  if (token) activeSessions.delete(token);
+apiRouter.post('/auth/logout', (req, res) => {
   res.clearCookie('vault_session', { path: '/' });
   auditLog('LOGOUT', { ip: getClientIp(req) });
   return res.json({ success: true, message: 'Logged out successfully.' });
 });
 
 // 4. List Files
-app.get('/api/files', requireAuth, async (_req, res) => {
+apiRouter.get('/files', requireAuth, async (_req, res) => {
+  if (!isSupabaseConfigured) {
+    return res.status(503).json({
+      error: 'Supabase credentials not configured in Vercel environment variables. Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY in Vercel Project Settings.',
+      files: [],
+      totalCount: 0,
+    });
+  }
   try {
     const files = await dbListFiles();
     res.json({ files, totalCount: files.length });
@@ -600,7 +615,12 @@ app.get('/api/files', requireAuth, async (_req, res) => {
 });
 
 // 5. Upload File → Supabase Storage + PostgreSQL metadata
-app.post('/api/files/upload', requireAuth, upload.single('file'), async (req, res) => {
+apiRouter.post('/files/upload', requireAuth, upload.single('file'), async (req, res) => {
+  if (!isSupabaseConfigured) {
+    return res.status(503).json({
+      error: 'Supabase credentials not configured in Vercel environment variables. Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY in Vercel Project Settings.',
+    });
+  }
   if (!req.file) return res.status(400).json({ error: 'No file provided.' });
 
   const file = req.file;
@@ -673,14 +693,14 @@ app.post('/api/files/upload', requireAuth, upload.single('file'), async (req, re
 });
 
 // 6. Get File Details
-app.get('/api/files/:id', requireAuth, async (req, res) => {
+apiRouter.get('/files/:id', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);
   if (!file) return res.status(404).json({ error: 'File not found.' });
   return res.json({ file });
 });
 
 // 7. Download File (authenticated, server proxies from Supabase Storage)
-app.get('/api/files/:id/download', requireAuth, async (req, res) => {
+apiRouter.get('/files/:id/download', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);
   if (!file) return res.status(404).json({ error: 'File not found.' });
 
@@ -698,7 +718,7 @@ app.get('/api/files/:id/download', requireAuth, async (req, res) => {
 });
 
 // 8. Raw Stream for In-App Preview (protected inline streaming)
-app.get('/api/files/:id/raw', requireAuth, async (req, res) => {
+apiRouter.get('/files/:id/raw', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);
   if (!file) return res.status(404).json({ error: 'File not found.' });
 
@@ -726,7 +746,7 @@ app.get('/api/files/:id/raw', requireAuth, async (req, res) => {
 });
 
 // 9. Presentation Details & Slides
-app.get('/api/files/:id/presentation', requireAuth, async (req, res) => {
+apiRouter.get('/files/:id/presentation', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);
   if (!file) return res.status(404).json({ error: 'Presentation not found.' });
 
@@ -747,7 +767,7 @@ app.get('/api/files/:id/presentation', requireAuth, async (req, res) => {
 });
 
 // 10. PPTX Embedded Media Asset Stream
-app.get('/api/files/:id/slides/:slideIndex/media/:mediaName', requireAuth, async (req, res) => {
+apiRouter.get('/files/:id/slides/:slideIndex/media/:mediaName', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);
   if (!file) return res.status(404).send('Not found');
 
@@ -775,7 +795,7 @@ app.get('/api/files/:id/slides/:slideIndex/media/:mediaName', requireAuth, async
 });
 
 // 11. Delete File (removes from Supabase Storage + PostgreSQL)
-app.delete('/api/files/:id', requireAuth, async (req, res) => {
+apiRouter.delete('/files/:id', requireAuth, async (req, res) => {
   const file = await dbGetFile(req.params.id);
   if (!file) return res.status(404).json({ error: 'File not found.' });
 
@@ -798,7 +818,7 @@ app.delete('/api/files/:id', requireAuth, async (req, res) => {
 });
 
 // 12. Seed Starter Demo Files (creates sample PPTX + PDF in Supabase Storage)
-app.post('/api/files/seed-samples', requireAuth, async (req, res) => {
+apiRouter.post('/files/seed-samples', requireAuth, async (req, res) => {
   try {
     // 1. Create a sample PPTX
     const samplePptxZip = new JSZip();
@@ -951,6 +971,10 @@ startxref
   }
 });
 
+// Mount API router at both '/api' and '/' for universal routing support (Vercel & standalone)
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
+
 // ─────────────────────────────────────────────
 // Vite Dev Server / Production Static Files
 // ─────────────────────────────────────────────
@@ -979,4 +1003,9 @@ async function startServer() {
   });
 }
 
-startServer();
+// Only start standalone HTTP listener when running locally, not under Vercel Serverless
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;

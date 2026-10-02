@@ -1,0 +1,6 @@
+{
+  "name": "Aegis Vault",
+  "description": "Standalone private file vault with secure 6-character authentication, multi-format previewing, PPTX presentation mode with laser pointer and pen annotations, and private storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

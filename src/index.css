@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #09090b;
+    color: #f4f4f5;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom aesthetic scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Laser pointer animation */
+@keyframes laser-pulse {
+  0%, 100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 12px 3px rgba(239, 68, 68, 0.8), 0 0 24px 8px rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.15);
+    box-shadow: 0 0 16px 5px rgba(239, 68, 68, 0.95), 0 0 32px 12px rgba(239, 68, 68, 0.5);
+  }
+}
+
+.laser-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background-color: #f87171;
+  border-radius: 9999px;
+  pointer-events: none;
+  animation: laser-pulse 1.2s infinite ease-in-out;
+  z-index: 50;
+  mix-blend-mode: screen;
+}
